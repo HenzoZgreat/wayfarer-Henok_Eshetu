@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-const { query } = require('./src/db');
+const { query, pool } = require('./src/db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -227,12 +227,114 @@ app.post('/api/places/:id/reviews', async (req, res) => {
   }
 });
 
+/**
+ * 5. POST /api/places/:id/book
+ * Books a tour slot with row-level concurrency locking (FOR UPDATE)
+ * Request Body: { "slot_id": 10, "user_id": 1, "seats": 1 }
+ */
+app.post('/api/places/:id/book', async (req, res) => {
+  const placeId = parseInt(req.params.id, 10);
+  const { slot_id, user_id, seats } = req.body;
+
+  // 1. Input Validation
+  if (isNaN(placeId)) {
+    return res.status(400).json({ error: 'Invalid place ID' });
+  }
+
+  const slotId = parseInt(slot_id, 10);
+  if (!slot_id || isNaN(slotId)) {
+    return res.status(400).json({ error: 'Valid slot_id is required' });
+  }
+
+  const userId = parseInt(user_id, 10);
+  if (!user_id || isNaN(userId)) {
+    return res.status(400).json({ error: 'Valid user_id is required' });
+  }
+
+  const requestedSeats = seats !== undefined ? parseInt(seats, 10) : 1;
+  if (isNaN(requestedSeats) || requestedSeats <= 0) {
+    return res.status(400).json({ error: 'Seats must be a positive integer' });
+  }
+
+  // 2. Concurrency-Safe Transaction with Row-Level Locking
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // Row-level lock on the tour slot
+    const slotQuery = `
+      SELECT id, place_id, capacity, starts_at 
+      FROM tour_slots 
+      WHERE id = $1 AND place_id = $2 
+      FOR UPDATE;
+    `;
+    const slotRes = await client.query(slotQuery, [slotId, placeId]);
+
+    if (slotRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Tour slot not found for this place' });
+    }
+
+    const slot = slotRes.rows[0];
+
+    // Calculate currently booked seats inside locked transaction
+    const bookedQuery = `
+      SELECT COALESCE(SUM(seats), 0)::int AS booked_seats 
+      FROM bookings 
+      WHERE slot_id = $1;
+    `;
+    const bookedRes = await client.query(bookedQuery, [slotId]);
+    const bookedSeats = bookedRes.rows[0].booked_seats;
+    const availableSeats = slot.capacity - bookedSeats;
+
+    // Check if enough seats are left
+    if (availableSeats < requestedSeats) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Selected tour slot is fully booked',
+        available_seats: Math.max(0, availableSeats),
+        requested_seats: requestedSeats,
+      });
+    }
+
+    // Insert booking
+    const insertQuery = `
+      INSERT INTO bookings (slot_id, user_id, seats)
+      VALUES ($1, $2, $3)
+      RETURNING id, slot_id, user_id, seats, created_at;
+    `;
+    const insertRes = await client.query(insertQuery, [slotId, userId, requestedSeats]);
+
+    await client.query('COMMIT');
+
+    return res.status(201).json({
+      message: 'Booking confirmed successfully',
+      booking: insertRes.rows[0],
+      remaining_seats: availableSeats - requestedSeats,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error booking tour slot:', error);
+    if (error.code === '23503') {
+      return res.status(404).json({ error: 'Referenced user or slot does not exist' });
+    }
+    return res.status(500).json({ error: 'Failed to process booking' });
+  } finally {
+    client.release();
+  }
+});
+
 // 404 Handler for unknown routes
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
 // Start Server
-app.listen(PORT, () => {
-  console.log(`Wayfarer backend server running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Wayfarer backend server running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

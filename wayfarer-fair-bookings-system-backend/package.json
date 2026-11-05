@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon server.js",
     "migrate": "node src/db/migrate.js",
-    "seed": "node src/db/seed.js"
+    "seed": "node src/db/seed.js",
+    "test": "jest --runInBand"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +20,8 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.14",
+    "supertest": "^7.0.0"
   }
 }
