@@ -1,94 +1,50 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Place, MockUser, Review, TourSlot } from '@/data/mockData';
+import React, { useState, useEffect } from 'react';
+import { Place, User, Review, TourSlot } from '@/services/api';
 
 interface PlaceDetailProps {
   place: Place;
-  activeUser: MockUser;
+  activeUser: User | null;
+  isLoading?: boolean;
 }
 
-export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
-  // Local state for interactive UI preview of tours & reviews
-  const [tourSlots, setTourSlots] = useState<TourSlot[]>(place.tourSlots);
-  const [reviews, setReviews] = useState<Review[]>(place.reviews);
+export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetailProps) {
+  // Local state for tours & reviews loaded from the database
+  const [tourSlots, setTourSlots] = useState<TourSlot[]>(place.tourSlots || []);
+  const [reviews, setReviews] = useState<Review[]>(place.reviews || []);
 
   // Review form state
   const [ratingInput, setRatingInput] = useState<number>(5);
   const [hoverRating, setHoverRating] = useState<number | null>(null);
   const [commentInput, setCommentInput] = useState<string>('');
 
-  // Inline feedback messages (Requirement 4)
+  // Inline feedback messages
   const [toastMessage, setToastMessage] = useState<{
-    type: 'success' | 'error';
+    type: 'success' | 'error' | 'info';
     text: string;
   } | null>(null);
 
-  // Synchronize when a different place is clicked in the list
-  React.useEffect(() => {
-    setTourSlots(place.tourSlots);
-    setReviews(place.reviews);
+  // Synchronize when a different place is clicked or loaded
+  useEffect(() => {
+    setTourSlots(place.tourSlots || []);
+    setReviews(place.reviews || []);
     setToastMessage(null);
     setCommentInput('');
     setRatingInput(5);
   }, [place]);
 
-  // Handle booking action
-  const handleBookSlot = (slotId: string) => {
-    const slot = tourSlots.find((s) => s.id === slotId);
-    if (!slot) return;
-
-    if (slot.availableSeats <= 0) {
-      setToastMessage({
-        type: 'error',
-        text: `Unable to book: "${slot.time}" is already fully booked!`,
-      });
-      return;
-    }
-
-    setTourSlots((prev) =>
-      prev.map((s) =>
-        s.id === slotId ? { ...s, availableSeats: s.availableSeats - 1 } : s
-      )
-    );
-
-    setToastMessage({
-      type: 'success',
-      text: `Seat confirmed for ${activeUser.name} on the ${slot.time} tour! (${slot.availableSeats - 1} seats remaining)`,
-    });
-  };
-
-  // Handle review submit
-  const handleSubmitReview = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!commentInput.trim()) {
-      setToastMessage({
-        type: 'error',
-        text: 'Please write a brief comment before submitting your review.',
-      });
-      return;
-    }
-
-    const newRev: Review = {
-      id: `rev-${Date.now()}`,
-      userName: activeUser.name,
-      userAvatar: activeUser.avatar,
-      rating: ratingInput,
-      comment: commentInput.trim(),
-      date: 'Just now',
-    };
-
-    setReviews([newRev, ...reviews]);
-    setCommentInput('');
-    setRatingInput(5);
-    setToastMessage({
-      type: 'success',
-      text: `Thank you, ${activeUser.name}! Your review has been added.`,
-    });
-  };
+  const ratingValue = Number(place.starRating) || 0;
+  const userName = activeUser ? activeUser.name : 'Traveler';
 
   return (
     <div className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 space-y-8 shadow-sm">
+      {isLoading && (
+        <div className="text-xs text-indigo-600 font-semibold animate-pulse">
+          Refreshing details from database...
+        </div>
+      )}
+
       {/* 1. Metadata Section */}
       <section className="space-y-4">
         {/* Banner Image */}
@@ -114,7 +70,7 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
             </h1>
             <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1 rounded-full border border-amber-200 text-xs font-bold text-amber-800">
               <span>★</span>
-              <span>{place.starRating.toFixed(1)}</span>
+              <span>{ratingValue.toFixed(1)}</span>
               <span className="text-amber-600 font-normal">({reviews.length} reviews)</span>
             </div>
           </div>
@@ -132,12 +88,14 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
         </div>
       </section>
 
-      {/* Inline Feedback Banner (Requirement 4) */}
+      {/* Inline Feedback Banner */}
       {toastMessage && (
         <div
           className={`p-3.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
             toastMessage.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+              : toastMessage.type === 'info'
+              ? 'bg-indigo-50 text-indigo-800 border border-indigo-200'
               : 'bg-rose-50 text-rose-800 border border-rose-200'
           }`}
         >
@@ -157,56 +115,67 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Guided Tours</h2>
-            <p className="text-xs text-zinc-500">Reserved in real-time under active persona: {activeUser.name}</p>
+            <p className="text-xs text-zinc-500">
+              Available slots fetched from database. Acting as: <strong className="text-zinc-700">{userName}</strong>
+            </p>
           </div>
         </div>
 
         <div className="space-y-3">
-          {tourSlots.map((slot) => {
-            const isFull = slot.availableSeats <= 0;
-            return (
-              <div
-                key={slot.id}
-                className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-colors gap-3 ${
-                  isFull ? 'bg-zinc-50 border-zinc-200 opacity-60' : 'bg-white border-zinc-200 hover:border-zinc-300'
-                }`}
-              >
-                <div>
-                  <div className="text-sm font-semibold text-zinc-900">{slot.time}</div>
-                  <div className="text-xs text-zinc-500 mt-0.5">Guide: {slot.guide}</div>
-                  <div className="mt-1">
-                    <span
-                      className={`inline-block text-xs font-medium ${
-                        isFull ? 'text-rose-600' : 'text-emerald-700'
-                      }`}
-                    >
-                      {isFull ? '0 seats left' : `${slot.availableSeats} of ${slot.totalSeats} seats left`}
-                    </span>
+          {tourSlots.length === 0 ? (
+            <p className="text-xs text-zinc-400 italic">No scheduled tour slots available for this place.</p>
+          ) : (
+            tourSlots.map((slot) => {
+              const isFull = slot.availableSeats <= 0;
+              return (
+                <div
+                  key={slot.id}
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-colors gap-3 ${
+                    isFull ? 'bg-zinc-50 border-zinc-200 opacity-60' : 'bg-white border-zinc-200 hover:border-zinc-300'
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-900">{slot.time}</div>
+                    <div className="text-xs text-zinc-500 mt-0.5">Guide: {slot.guide}</div>
+                    <div className="mt-1">
+                      <span
+                        className={`inline-block text-xs font-medium ${
+                          isFull ? 'text-rose-600' : 'text-emerald-700'
+                        }`}
+                      >
+                        {isFull ? '0 seats left' : `${slot.availableSeats} of ${slot.totalSeats} seats left`}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div>
+                    {isFull ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-zinc-200 text-zinc-400 cursor-not-allowed"
+                      >
+                        Fully booked
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setToastMessage({
+                            type: 'info',
+                            text: `Slot "${slot.time}" selected. Booking submissions will be wired in the next step.`,
+                          })
+                        }
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-transform active:scale-95"
+                      >
+                        Book Tour
+                      </button>
+                    )}
                   </div>
                 </div>
-
-                <div>
-                  {isFull ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-zinc-200 text-zinc-400 cursor-not-allowed"
-                    >
-                      Fully booked
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleBookSlot(slot.id)}
-                      className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-transform active:scale-95"
-                    >
-                      Book Tour
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       </section>
 
@@ -224,7 +193,7 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
               <div key={rev.id} className="p-4 rounded-xl border border-zinc-100 bg-zinc-50/60 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-700">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 text-xs font-bold">
                       {rev.userAvatar}
                     </span>
                     <span className="text-xs font-bold text-zinc-800">{rev.userName}</span>
@@ -248,11 +217,20 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold text-zinc-900">Leave a Review</h2>
           <span className="text-xs text-zinc-500">
-            Reviewing as: <strong className="text-indigo-600">{activeUser.name}</strong>
+            Reviewing as: <strong className="text-indigo-600">{userName}</strong>
           </span>
         </div>
 
-        <form onSubmit={handleSubmitReview} className="space-y-3.5">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setToastMessage({
+              type: 'info',
+              text: 'Review submission will be connected to the backend in the next step.',
+            });
+          }}
+          className="space-y-3.5"
+        >
           {/* Star selector */}
           <div>
             <label className="block text-xs font-medium text-zinc-500 mb-1">
@@ -292,7 +270,7 @@ export function PlaceDetail({ place, activeUser }: PlaceDetailProps) {
               rows={3}
               value={commentInput}
               onChange={(e) => setCommentInput(e.target.value)}
-              placeholder={`Share your highlights with fellow travelers, ${activeUser.name}...`}
+              placeholder={`Share your highlights with fellow travelers, ${userName}...`}
               className="w-full rounded-xl border border-zinc-200 p-3 text-xs text-zinc-900 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
             />
           </div>

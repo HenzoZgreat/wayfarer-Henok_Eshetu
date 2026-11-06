@@ -1,5 +1,5 @@
 import React from 'react';
-import { Place } from '@/data/mockData';
+import { Place } from '@/services/api';
 
 interface PlaceCardProps {
   place: Place;
@@ -8,6 +8,8 @@ interface PlaceCardProps {
 }
 
 export function PlaceCard({ place, isSelected, onSelect }: PlaceCardProps) {
+  const ratingValue = Number(place.starRating) || 0;
+
   return (
     <div
       onClick={() => onSelect(place)}
@@ -52,7 +54,7 @@ export function PlaceCard({ place, isSelected, onSelect }: PlaceCardProps) {
                 <svg
                   key={i}
                   className={`w-3.5 h-3.5 ${
-                    i < Math.round(place.starRating) ? 'fill-current' : 'text-zinc-200'
+                    i < Math.round(ratingValue) ? 'fill-current' : 'text-zinc-200'
                   }`}
                   viewBox="0 0 20 20"
                 >
@@ -61,7 +63,7 @@ export function PlaceCard({ place, isSelected, onSelect }: PlaceCardProps) {
               ))}
             </div>
 
-            <span className="font-bold text-zinc-800">{place.starRating.toFixed(1)}</span>
+            <span className="font-bold text-zinc-800">{ratingValue.toFixed(1)}</span>
             <span className="text-zinc-400">({place.reviewCount} reviews)</span>
           </div>
         </div>
