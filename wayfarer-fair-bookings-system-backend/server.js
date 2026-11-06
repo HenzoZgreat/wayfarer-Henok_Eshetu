@@ -42,7 +42,7 @@ app.get('/api/users', async (req, res) => {
  */
 app.get('/api/places', async (req, res) => {
   const { category, sort } = req.query;
-  const m = 3; // Minimum smoothing threshold
+  const m = 5; // Minimum smoothing threshold (m=5)
 
   try {
     let orderByClause = 'ORDER BY weighted_score DESC, ps.review_count DESC, ps.id ASC';
@@ -105,26 +105,53 @@ app.get('/api/places', async (req, res) => {
 
 /**
  * 3. GET /api/places/:id
- * Returns a single place's details, existing reviews, and tour slots with remaining seat calculations.
+ * Returns a single place's details with Bayesian Average score, existing reviews, and tour slots.
  */
 app.get('/api/places/:id', async (req, res) => {
   const { id } = req.params;
+  const m = 5; // Minimum smoothing threshold (m=5)
 
   try {
-    // 1. Fetch place details with summary rating stats
+    // 1. Fetch place details with Bayesian weighted score & summary rating stats
     const placeQuery = `
+      WITH global_stats AS (
+        SELECT COALESCE(ROUND(AVG(rating)::numeric, 2), 4.5)::float AS global_avg
+        FROM reviews
+      ),
+      place_stats AS (
+        SELECT 
+          p.id,
+          p.name,
+          p.category,
+          p.description,
+          p.opening_hours,
+          COUNT(r.id)::int AS review_count,
+          COALESCE(ROUND(AVG(r.rating)::numeric, 2), 0)::float AS average_rating
+        FROM places p
+        LEFT JOIN reviews r ON p.id = r.place_id
+        WHERE p.id = $1
+        GROUP BY p.id
+      )
       SELECT 
-        p.id,
-        p.name,
-        p.category,
-        p.description,
-        p.opening_hours,
-        COUNT(r.id)::int AS review_count,
-        COALESCE(ROUND(AVG(r.rating)::numeric, 2), 0)::float AS average_rating
-      FROM places p
-      LEFT JOIN reviews r ON p.id = r.place_id
-      WHERE p.id = $1
-      GROUP BY p.id;
+        ps.id,
+        ps.name,
+        ps.category,
+        ps.description,
+        ps.opening_hours,
+        ps.review_count,
+        ps.average_rating,
+        CASE 
+          WHEN ps.review_count = 0 THEN 0
+          ELSE ROUND(
+            (
+              (ps.review_count::numeric / (ps.review_count + ${m})) * ps.average_rating + 
+              (${m}.0 / (ps.review_count + ${m})) * gs.global_avg
+            )::numeric, 
+            2
+          )::float
+        END AS weighted_score
+      FROM place_stats ps
+      CROSS JOIN global_stats gs;
     `;
     const placeRes = await query(placeQuery, [id]);
 

@@ -51,6 +51,7 @@ export interface Place {
   description: string;
   openingHours: string;
   starRating: number;
+  rawRating?: number;
   reviewCount: number;
   weightedScore?: number;
   imageUrl: string;
@@ -191,19 +192,28 @@ export async function fetchPlaces(
       review_count: number;
       average_rating: number;
       weighted_score: number;
-    }) => ({
-      id: p.id,
-      name: p.name,
-      category: p.category,
-      description: p.description,
-      openingHours: p.opening_hours,
-      starRating: p.average_rating || 0,
-      reviewCount: p.review_count || 0,
-      weightedScore: p.weighted_score,
-      imageUrl: resolvePlaceImage(p.name, p.category),
-      tourSlots: [],
-      reviews: [],
-    })
+    }) => {
+      // Use Bayesian weighted score as the overall ranking rating when reviews exist
+      const bayesianRating =
+        p.review_count > 0 && p.weighted_score !== undefined && p.weighted_score !== null
+          ? p.weighted_score
+          : p.average_rating || 0;
+
+      return {
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        description: p.description,
+        openingHours: p.opening_hours,
+        starRating: bayesianRating,
+        rawRating: p.average_rating || 0,
+        reviewCount: p.review_count || 0,
+        weightedScore: p.weighted_score,
+        imageUrl: resolvePlaceImage(p.name, p.category),
+        tourSlots: [],
+        reviews: [],
+      };
+    }
   );
 }
 
@@ -222,14 +232,22 @@ export async function fetchPlaceById(id: number | string): Promise<Place> {
   const data = await res.json();
   const p = data.place;
 
+  // Use Bayesian weighted score as the overall place rating
+  const bayesianRating =
+    p.review_count > 0 && p.weighted_score !== undefined && p.weighted_score !== null
+      ? p.weighted_score
+      : p.average_rating || 0;
+
   return {
     id: p.id,
     name: p.name,
     category: p.category,
     description: p.description,
     openingHours: p.opening_hours,
-    starRating: p.average_rating || 0,
+    starRating: bayesianRating,
+    rawRating: p.average_rating || 0,
     reviewCount: p.review_count || 0,
+    weightedScore: p.weighted_score,
     imageUrl: resolvePlaceImage(p.name, p.category),
     tourSlots: (p.tour_slots || []).map(
       (s: {

@@ -245,10 +245,22 @@ export function PlaceDetail({
             <h1 className="text-2xl sm:text-3xl font-extrabold text-zinc-900">
               {place.name}
             </h1>
-            <div className="flex items-center gap-1.5 bg-amber-50 px-3 py-1 rounded-full border border-amber-200 text-xs font-bold text-amber-800">
-              <span>★</span>
-              <span>{ratingValue.toFixed(1)}</span>
-              <span className="text-amber-600 font-normal">({reviews.length} reviews)</span>
+            <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-1.5 bg-amber-50 px-3 py-1 rounded-full border border-amber-200 text-xs font-bold text-amber-800"
+                title="Calculated via Bayesian Average ranking (smoothing weight m=5)"
+              >
+                <span>★</span>
+                <span>{ratingValue.toFixed(1)}</span>
+                <span className="text-amber-600 font-normal">
+                  ({reviews.length} {reviews.length === 1 ? 'review' : 'reviews'})
+                </span>
+              </div>
+              {place.rawRating !== undefined && place.rawRating !== ratingValue && place.reviewCount > 0 && (
+                <span className="text-[11px] text-zinc-400 font-medium">
+                  (Bayesian score • raw avg: {place.rawRating.toFixed(1)})
+                </span>
+              )}
             </div>
           </div>
 
