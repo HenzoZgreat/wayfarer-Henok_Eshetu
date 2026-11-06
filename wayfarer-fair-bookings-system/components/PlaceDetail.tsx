@@ -1,18 +1,39 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Place, User, Review, TourSlot } from '@/services/api';
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Place,
+  User,
+  Review,
+  TourSlot,
+  bookTourSlot,
+  submitReview,
+} from '@/services/api';
 
 interface PlaceDetailProps {
   place: Place;
   activeUser: User | null;
   isLoading?: boolean;
+  onBookingSuccess?: () => void;
+  onReviewSuccess?: () => void;
 }
 
-export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetailProps) {
+export function PlaceDetail({
+  place,
+  activeUser,
+  isLoading = false,
+  onBookingSuccess,
+  onReviewSuccess,
+}: PlaceDetailProps) {
   // Local state for tours & reviews loaded from the database
   const [tourSlots, setTourSlots] = useState<TourSlot[]>(place.tourSlots || []);
   const [reviews, setReviews] = useState<Review[]>(place.reviews || []);
+
+  // Slot currently undergoing booking API request
+  const [bookingSlotId, setBookingSlotId] = useState<number | null>(null);
+
+  // Review submission in progress state
+  const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
 
   // Review form state
   const [ratingInput, setRatingInput] = useState<number>(5);
@@ -25,6 +46,12 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
     text: string;
   } | null>(null);
 
+  // Detect if active persona already submitted a review for this place
+  const existingUserReview = useMemo(() => {
+    if (!activeUser) return null;
+    return reviews.find((r) => r.userId === activeUser.id);
+  }, [reviews, activeUser]);
+
   // Synchronize when a different place is clicked or loaded
   useEffect(() => {
     setTourSlots(place.tourSlots || []);
@@ -36,6 +63,156 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
 
   const ratingValue = Number(place.starRating) || 0;
   const userName = activeUser ? activeUser.name : 'Traveler';
+
+  // Booking action handler connected to POST /api/places/:id/book
+  const handleBookSlot = async (slot: TourSlot) => {
+    if (!activeUser) {
+      setToastMessage({
+        type: 'error',
+        text: 'Please select a persona from the header dropdown before booking.',
+      });
+      return;
+    }
+
+    if (slot.availableSeats <= 0) {
+      setToastMessage({
+        type: 'error',
+        text: `Unable to book: "${slot.time}" is already fully booked.`,
+      });
+      return;
+    }
+
+    setBookingSlotId(slot.id);
+    setToastMessage(null);
+
+    try {
+      const res = await bookTourSlot(place.id, slot.id, activeUser.id, 1);
+
+      // Update remaining seats and mark as booked by activeUser locally
+      setTourSlots((prev) =>
+        prev.map((s) =>
+          s.id === slot.id
+            ? {
+                ...s,
+                availableSeats: res.remaining_seats,
+                bookedUserIds: [...(s.bookedUserIds || []), activeUser.id],
+              }
+            : s
+        )
+      );
+
+      setToastMessage({
+        type: 'success',
+        text: `Seat confirmed for ${activeUser.name} on the ${slot.time} tour! (${res.remaining_seats} seat${res.remaining_seats === 1 ? '' : 's'} remaining)`,
+      });
+
+      if (onBookingSuccess) {
+        onBookingSuccess();
+      }
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : 'Failed to complete booking';
+
+      setToastMessage({
+        type: 'error',
+        text: errorMessage,
+      });
+
+      // If rejected due to slot being full, update UI to reflect 0 seats
+      if (errorMessage.toLowerCase().includes('fully booked')) {
+        setTourSlots((prev) =>
+          prev.map((s) => (s.id === slot.id ? { ...s, availableSeats: 0 } : s))
+        );
+      }
+    } finally {
+      setBookingSlotId(null);
+    }
+  };
+
+  // Review submission handler connected to POST /api/places/:id/reviews
+  const handleSubmitReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!activeUser) {
+      setToastMessage({
+        type: 'error',
+        text: 'Please select a persona from the header before submitting a review.',
+      });
+      return;
+    }
+
+    const trimmedComment = commentInput.trim();
+    if (!trimmedComment) {
+      setToastMessage({
+        type: 'error',
+        text: 'Please write a brief comment describing your experience.',
+      });
+      return;
+    }
+
+    if (ratingInput < 1 || ratingInput > 5) {
+      setToastMessage({
+        type: 'error',
+        text: 'Rating must be between 1 and 5 stars.',
+      });
+      return;
+    }
+
+    setIsSubmittingReview(true);
+    setToastMessage(null);
+
+    try {
+      const res = await submitReview(
+        place.id,
+        activeUser.id,
+        ratingInput,
+        trimmedComment
+      );
+      const isUpdate = Boolean(existingUserReview);
+
+      // Create new/updated review object for local UI state
+      const updatedReview: Review = {
+        id: res.review.id,
+        userId: activeUser.id,
+        userName: activeUser.name,
+        userAvatar: activeUser.avatar,
+        rating: ratingInput,
+        comment: trimmedComment,
+        date: 'Just now',
+      };
+
+      // Upsert into local reviews list
+      setReviews((prev) => {
+        const remaining = prev.filter((r) => r.userId !== activeUser.id);
+        return [updatedReview, ...remaining];
+      });
+
+      // Clear input text
+      setCommentInput('');
+
+      // Show decent feedback message
+      setToastMessage({
+        type: 'success',
+        text: isUpdate
+          ? `Review updated! Your ${ratingInput}-star rating and comment for ${place.name} have been saved.`
+          : `Thank you, ${activeUser.name}! Your ${ratingInput}-star review for ${place.name} has been published.`,
+      });
+
+      // Trigger parent callback to refresh place ratings and sidebar list
+      if (onReviewSuccess) {
+        onReviewSuccess();
+      }
+    } catch (err: unknown) {
+      const errorMsg =
+        err instanceof Error ? err.message : 'Failed to submit review';
+      setToastMessage({
+        type: 'error',
+        text: errorMsg,
+      });
+    } finally {
+      setIsSubmittingReview(false);
+    }
+  };
 
   return (
     <div className="bg-white rounded-3xl border border-zinc-200 p-6 sm:p-8 space-y-8 shadow-sm">
@@ -127,29 +304,69 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
           ) : (
             tourSlots.map((slot) => {
               const isFull = slot.availableSeats <= 0;
+              const isUserBooked = Boolean(
+                activeUser && slot.bookedUserIds?.includes(activeUser.id)
+              );
+
               return (
                 <div
                   key={slot.id}
                   className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-colors gap-3 ${
-                    isFull ? 'bg-zinc-50 border-zinc-200 opacity-60' : 'bg-white border-zinc-200 hover:border-zinc-300'
+                    isUserBooked
+                      ? 'bg-emerald-50/50 border-emerald-200'
+                      : isFull
+                      ? 'bg-zinc-50 border-zinc-200 opacity-60'
+                      : 'bg-white border-zinc-200 hover:border-zinc-300'
                   }`}
                 >
                   <div>
-                    <div className="text-sm font-semibold text-zinc-900">{slot.time}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-zinc-900">{slot.time}</div>
+                      {isUserBooked && (
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                          Your Reservation
+                        </span>
+                      )}
+                    </div>
                     <div className="text-xs text-zinc-500 mt-0.5">Guide: {slot.guide}</div>
                     <div className="mt-1">
                       <span
                         className={`inline-block text-xs font-medium ${
-                          isFull ? 'text-rose-600' : 'text-emerald-700'
+                          isUserBooked
+                            ? 'text-emerald-700 font-semibold'
+                            : isFull
+                            ? 'text-rose-600'
+                            : 'text-emerald-700'
                         }`}
                       >
-                        {isFull ? '0 seats left' : `${slot.availableSeats} of ${slot.totalSeats} seats left`}
+                        {isUserBooked
+                          ? 'You are booked on this tour'
+                          : isFull
+                          ? '0 seats left'
+                          : `${slot.availableSeats} of ${slot.totalSeats} seats left`}
                       </span>
                     </div>
                   </div>
 
                   <div>
-                    {isFull ? (
+                    {isUserBooked ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200 cursor-default flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        <svg
+                          className="w-3.5 h-3.5 text-emerald-700"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          strokeWidth={2.5}
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span>Booked</span>
+                      </button>
+                    ) : isFull ? (
                       <button
                         type="button"
                         disabled
@@ -160,15 +377,43 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
                     ) : (
                       <button
                         type="button"
-                        onClick={() =>
-                          setToastMessage({
-                            type: 'info',
-                            text: `Slot "${slot.time}" selected. Booking submissions will be wired in the next step.`,
-                          })
-                        }
-                        className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-transform active:scale-95"
+                        disabled={bookingSlotId !== null}
+                        onClick={() => handleBookSlot(slot)}
+                        className={`w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold text-white shadow-sm transition-all flex items-center justify-center gap-1.5 ${
+                          bookingSlotId === slot.id
+                            ? 'bg-indigo-400 cursor-wait'
+                            : bookingSlotId !== null
+                            ? 'bg-indigo-300 cursor-not-allowed'
+                            : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'
+                        }`}
                       >
-                        Book Tour
+                        {bookingSlotId === slot.id ? (
+                          <>
+                            <svg
+                              className="animate-spin h-3.5 w-3.5 text-white"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              />
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              />
+                            </svg>
+                            <span>Booking...</span>
+                          </>
+                        ) : (
+                          'Book Tour'
+                        )}
                       </button>
                     )}
                   </div>
@@ -221,16 +466,28 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
           </span>
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setToastMessage({
-              type: 'info',
-              text: 'Review submission will be connected to the backend in the next step.',
-            });
-          }}
-          className="space-y-3.5"
-        >
+        {existingUserReview && (
+          <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-2.5 text-xs text-indigo-800 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span>✍️</span>
+              <span>
+                You already reviewed this place (<strong>★ {existingUserReview.rating}</strong>). Submitting will update your rating and comment.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setRatingInput(existingUserReview.rating);
+                setCommentInput(existingUserReview.comment);
+              }}
+              className="text-[11px] font-semibold text-indigo-700 underline hover:text-indigo-900 ml-2 whitespace-nowrap"
+            >
+              Load previous
+            </button>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmitReview} className="space-y-3.5">
           {/* Star selector */}
           <div>
             <label className="block text-xs font-medium text-zinc-500 mb-1">
@@ -278,9 +535,42 @@ export function PlaceDetail({ place, activeUser, isLoading = false }: PlaceDetai
           <div className="flex justify-end">
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all active:scale-95"
+              disabled={isSubmittingReview}
+              className={`px-5 py-2 rounded-xl text-xs font-semibold text-white shadow-sm transition-all flex items-center gap-1.5 ${
+                isSubmittingReview
+                  ? 'bg-indigo-400 cursor-wait'
+                  : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'
+              }`}
             >
-              Submit Review
+              {isSubmittingReview ? (
+                <>
+                  <svg
+                    className="animate-spin h-3.5 w-3.5 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    />
+                  </svg>
+                  <span>Submitting...</span>
+                </>
+              ) : existingUserReview ? (
+                'Update Review'
+              ) : (
+                'Submit Review'
+              )}
             </button>
           </div>
         </form>

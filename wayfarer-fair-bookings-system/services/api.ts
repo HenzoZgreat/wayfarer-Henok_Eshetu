@@ -19,6 +19,7 @@ export interface TourSlot {
   totalSeats: number;
   availableSeats: number;
   guide: string;
+  bookedUserIds?: number[];
 }
 
 export interface Review {
@@ -29,6 +30,18 @@ export interface Review {
   rating: number;
   comment: string;
   date: string;
+}
+
+export interface BookingResponse {
+  message: string;
+  booking: {
+    id: number;
+    slot_id: number;
+    user_id: number;
+    seats: number;
+    created_at: string;
+  };
+  remaining_seats: number;
 }
 
 export interface Place {
@@ -225,12 +238,14 @@ export async function fetchPlaceById(id: number | string): Promise<Place> {
         capacity: number;
         booked_seats: number;
         available_seats: number;
+        booked_user_ids?: number[];
       }) => ({
         id: s.id,
         time: formatSlotDateTime(s.starts_at),
         totalSeats: s.capacity,
         availableSeats: s.available_seats,
         guide: 'Wayfarer Guide',
+        bookedUserIds: s.booked_user_ids || [],
       })
     ),
     reviews: (p.reviews || []).map(
@@ -252,4 +267,78 @@ export async function fetchPlaceById(id: number | string): Promise<Place> {
       })
     ),
   };
+}
+
+/**
+ * 4. Book a tour slot with concurrency safety
+ * POST /api/places/:id/book
+ */
+export async function bookTourSlot(
+  placeId: number | string,
+  slotId: number,
+  userId: number,
+  seats: number = 1
+): Promise<BookingResponse> {
+  const res = await fetch(`${API_BASE_URL}/places/${placeId}/book`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      slot_id: slotId,
+      user_id: userId,
+      seats,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to complete booking');
+  }
+
+  return data as BookingResponse;
+}
+
+export interface ReviewResponse {
+  message?: string;
+  review: {
+    id: number;
+    place_id: number;
+    user_id: number;
+    rating: number;
+    body: string;
+    created_at: string;
+  };
+}
+
+/**
+ * 5. Submit or update a visitor review
+ * POST /api/places/:id/reviews
+ */
+export async function submitReview(
+  placeId: number | string,
+  userId: number,
+  rating: number,
+  body: string
+): Promise<ReviewResponse> {
+  const res = await fetch(`${API_BASE_URL}/places/${placeId}/reviews`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      rating,
+      body,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to submit review');
+  }
+
+  return data as ReviewResponse;
 }

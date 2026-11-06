@@ -121,6 +121,23 @@ export default function Home() {
     };
   }, [selectedPlaceId]);
 
+  // Refresh current place details after mutations like booking
+  const refreshCurrentPlace = useCallback(async () => {
+    if (!selectedPlaceId) return;
+    try {
+      const detail = await fetchPlaceById(selectedPlaceId);
+      setPlaceDetail(detail);
+    } catch (err: unknown) {
+      console.error('Failed to refresh place details:', err);
+    }
+  }, [selectedPlaceId]);
+
+  // Refresh both place details and global ranking after review submission
+  const handleReviewSuccess = useCallback(async () => {
+    await refreshCurrentPlace();
+    await loadPlaces();
+  }, [refreshCurrentPlace, loadPlaces]);
+
   return (
     <div className="min-h-screen bg-zinc-50 flex flex-col font-sans">
       {/* 1. Header with Brand, Category Pills, and Acting As Persona Switcher */}
@@ -170,6 +187,8 @@ export default function Home() {
                 place={placeDetail}
                 activeUser={activeUser}
                 isLoading={isLoadingDetail}
+                onBookingSuccess={refreshCurrentPlace}
+                onReviewSuccess={handleReviewSuccess}
               />
             ) : isLoadingPlaces ? (
               <div className="bg-white rounded-3xl border border-zinc-200 p-12 text-center text-zinc-400 animate-pulse">

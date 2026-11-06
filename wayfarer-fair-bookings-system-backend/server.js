@@ -157,7 +157,11 @@ app.get('/api/places/:id', async (req, res) => {
         ts.starts_at,
         ts.capacity,
         COALESCE(SUM(b.seats), 0)::int AS booked_seats,
-        (ts.capacity - COALESCE(SUM(b.seats), 0))::int AS available_seats
+        (ts.capacity - COALESCE(SUM(b.seats), 0))::int AS available_seats,
+        COALESCE(
+          JSON_AGG(b.user_id) FILTER (WHERE b.user_id IS NOT NULL),
+          '[]'::json
+        ) AS booked_user_ids
       FROM tour_slots ts
       LEFT JOIN bookings b ON ts.id = b.slot_id
       WHERE ts.place_id = $1
@@ -217,7 +221,10 @@ app.post('/api/places/:id/reviews', async (req, res) => {
     `;
 
     const { rows } = await query(sql, [placeId, parsedUserId, parsedRating, body.trim()]);
-    return res.status(201).json({ review: rows[0] });
+    return res.status(201).json({
+      message: 'Review submitted successfully',
+      review: rows[0],
+    });
   } catch (error) {
     console.error('Error submitting review:', error);
     if (error.code === '23503') {
@@ -277,6 +284,25 @@ app.post('/api/places/:id/book', async (req, res) => {
     }
 
     const slot = slotRes.rows[0];
+
+    // Check if this user has already booked any tour slot for this place
+    const userBookingQuery = `
+      SELECT b.id, b.slot_id
+      FROM bookings b
+      JOIN tour_slots ts ON b.slot_id = ts.id
+      WHERE ts.place_id = $1 AND b.user_id = $2;
+    `;
+    const userBookingRes = await client.query(userBookingQuery, [placeId, userId]);
+
+    if (userBookingRes.rows.length > 0) {
+      await client.query('ROLLBACK');
+      const isSameSlot = userBookingRes.rows.some((b) => b.slot_id === slotId);
+      return res.status(400).json({
+        error: isSameSlot
+          ? 'You have already booked this tour slot'
+          : 'You have already booked a tour for this place',
+      });
+    }
 
     // Calculate currently booked seats inside locked transaction
     const bookedQuery = `
